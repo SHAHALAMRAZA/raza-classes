@@ -30,7 +30,7 @@ function safeStudent(s){if(!s)return null;let {passwordHash,...x}=s;return x}
 function now(){return new Date()}
 async function supa(pathname,options={}){
   if(!HAS_SUPABASE) throw new Error('Supabase is not configured');
-  const headers={apikey:SUPABASE_SECRET_KEY,Authorization:`Bearer ${SUPABASE_SECRET_KEY}`,'Content-Type':'application/json',...(options.headers||{})};
+  const headers={apikey:SUPABASE_SECRET_KEY,'Content-Type':'application/json',...(options.headers||{})};
   const r=await fetch(`${SUPABASE_URL}${pathname}`, {...options,headers});
   let data=null; try{data=await r.json()}catch{}
   if(!r.ok){const msg=data?.msg||data?.message||data?.error_description||data?.error||`Supabase request failed (${r.status})`; const e=new Error(msg); e.status=r.status; e.data=data; throw e}
