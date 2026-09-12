@@ -17,9 +17,46 @@ function hash(s){return crypto.scryptSync(String(s),HASH_SALT,64).toString('hex'
 function id(){return crypto.randomUUID()}
 function fresh(){return {admin:{username:'admin',name:'Administrator',photo:null,siteName:'Raza Classes',tagline:'Where Mind Bloom',phone:'',email:'',passwordHash:hash(process.env.ADMIN_PASSWORD||'Admin@12345')},students:[],classes:[],materials:[],assignments:[],tests:[],quizzes:[],notices:[],homeHighlights:[],syllabus:null,examAdda:null}}
 function load(){if(!fs.existsSync(path.dirname(DATA)))fs.mkdirSync(path.dirname(DATA),{recursive:true});if(!fs.existsSync(DATA))fs.writeFileSync(DATA,JSON.stringify(fresh(),null,2));let d=JSON.parse(fs.readFileSync(DATA,'utf8'));let f=fresh();for(const k of Object.keys(f))if(d[k]===undefined)d[k]=f[k];if(!Array.isArray(d.classes))d.classes=[];if(!Array.isArray(d.materials))d.materials=[];if(!Array.isArray(d.assignments))d.assignments=[];if(!Array.isArray(d.tests))d.tests=[];if(!Array.isArray(d.quizzes))d.quizzes=[];if(!Array.isArray(d.notices))d.notices=[];if(!Array.isArray(d.homeHighlights))d.homeHighlights=[];return d}
-function save(db){const tmp=DATA+'.tmp';fs.writeFileSync(tmp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(tmp,DATA)}
+function saveLocalOnly(db){const tmp=DATA+'.tmp';fs.writeFileSync(tmp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(tmp,DATA)}
+function save(db){saveLocalOnly(db);queueCloudSave()}
 let db=load(); const sessions=new Map(); const attempts=new Map(); const loginHits=new Map();
-if(HAS_SUPABASE) syncAllClassesToSupabase().catch(e=>console.error('class sync warning:',e.message));
+let cloudWriteTimer=null, cloudWriteBusy=false, cloudWriteQueued=false;
+async function cloudReadState(){
+  if(!HAS_SUPABASE) return null;
+  try{
+    const rows=await supaDb('/app_data?key=eq.app_state&select=value',{method:'GET'});
+    return rows?.[0]?.value || null;
+  }catch(e){ console.error('cloud state read warning:',e.message); return null; }
+}
+async function cloudWriteState(snapshot){
+  if(!HAS_SUPABASE) return;
+  const value=JSON.parse(JSON.stringify(snapshot));
+  await supaDb('/app_data?on_conflict=key',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({key:'app_state',value,updated_at:new Date().toISOString()})});
+}
+function queueCloudSave(){
+  if(!HAS_SUPABASE) return;
+  cloudWriteQueued=true;
+  if(cloudWriteTimer)return;
+  cloudWriteTimer=setTimeout(async()=>{
+    cloudWriteTimer=null;
+    if(cloudWriteBusy||!cloudWriteQueued)return;
+    cloudWriteQueued=false; cloudWriteBusy=true;
+    try{await cloudWriteState(db)}catch(e){console.error('cloud state write warning:',e.message)}
+    finally{cloudWriteBusy=false;if(cloudWriteQueued)queueCloudSave()}
+  },250);
+}
+async function initializeCloudState(){
+  if(!HAS_SUPABASE)return;
+  const cloud=await cloudReadState();
+  if(cloud && typeof cloud==='object'){
+    const f=fresh(); for(const k of Object.keys(f)) if(cloud[k]!==undefined) db[k]=cloud[k];
+    saveLocalOnly(db);
+    console.log('Supabase persistent app state loaded.');
+  }else{
+    queueCloudSave();
+    console.log('No Supabase app state found; current local state will be seeded to Supabase.');
+  }
+}
 setInterval(()=>{const t=Date.now();for(const [k,v] of sessions)if(t-v.lastSeen>SESSION_TTL*1000)sessions.delete(k)},60000).unref();
 function rateLimit(key,limit=12,windowMs=10*60*1000){const now=Date.now(),a=loginHits.get(key)||[];const fresh=a.filter(t=>now-t<windowMs);if(fresh.length>=limit){loginHits.set(key,fresh);return false}fresh.push(now);loginHits.set(key,fresh);return true}
 function publicFile(res,file,type){const f=path.join(PUBLIC,file);if(!fs.existsSync(f))return send(res,404,{error:'File not found'});res.writeHead(200,{'Content-Type':type||'application/octet-stream','Cache-Control':'public, max-age=86400'});fs.createReadStream(f).pipe(res)}
@@ -139,7 +176,7 @@ function route(req,res){
  if(p==='/health'&&method==='GET')return send(res,200,{ok:true,supabase:HAS_SUPABASE});
  if(p==='/api/me'&&method==='GET')return send(res,200,{user:auth(req)||null});
  if(p==='/api/register'&&method==='POST'){if(!rateLimit('register:'+req.socket.remoteAddress,8))return send(res,429,{error:'Too many registration attempts. Try again later.'});return jsonBody(req).then(async x=>{if(!x.name||!x.email||!x.password||!x.className)return send(res,400,{error:'Name, email, class and password are required'});const email=String(x.email).trim().toLowerCase();if(db.students.some(s=>s.email.toLowerCase()===email))return send(res,409,{error:'Email already registered'});let authUser=null;if(HAS_SUPABASE){try{const created=await supaCreateUser({email,password:String(x.password),name:String(x.name)});authUser=created.user||created}catch(e){if(e.status===422||e.status===400)return send(res,409,{error:e.message||'Email already registered'});throw e}}let st={id:id(),auth_user_id:authUser?.id||null,name:x.name,email,className:x.className,roll:x.roll||'',phone:x.phone||'',photo:null,passwordHash:HAS_SUPABASE?null:hash(x.password),createdAt:new Date().toISOString()};await syncStudentToSupabase(st);db.students.push(st);save(db);let sv=id();sessions.set(sv,{role:'student',id:st.id,authUserId:st.auth_user_id,name:st.name,lastSeen:Date.now()});cookie(res,'sid',sv);send(res,201,{user:{role:'student',id:st.id,name:st.name}})}).catch(e=>{console.error('register error:',e.message);send(res,e.status===409?409:500,{error:e.status===409?e.message:'Registration failed'})});}
- if(p==='/api/login'&&method==='POST'){if(!rateLimit('login:'+req.socket.remoteAddress,15))return send(res,429,{error:'Too many login attempts. Try again later.'});return jsonBody(req).then(async x=>{let user=null;if(x.role==='admin'){if(x.username===db.admin.username&&x.password&&hash(x.password)===db.admin.passwordHash)user={role:'admin',id:'admin',name:db.admin.name||'Administrator'}}else{const email=String(x.email||'').trim().toLowerCase();let st=db.students.find(s=>s.email.toLowerCase()===email);if(st&&x.password){if(HAS_SUPABASE){try{let authData;if(st.auth_user_id){authData=await supaSignIn(email,String(x.password))}else{if(!st.passwordHash||hash(x.password)!==st.passwordHash)return send(res,401,{error:'Invalid login details'});const created=await supaCreateUser({email,password:String(x.password),name:st.name});authData=await supaSignIn(email,String(x.password));st.auth_user_id=(created.user||created).id;st.passwordHash=null;save(db)}if(authData?.user){user={role:'student',id:st.id,authUserId:authData.user.id,name:st.name}}}catch(e){return send(res,401,{error:'Invalid login details'})}}else if(st.passwordHash&&hash(x.password)===st.passwordHash)user={role:'student',id:st.id,name:st.name}}}if(!user)return send(res,401,{error:'Invalid login details'});let sv=id();sessions.set(sv,{...user,lastSeen:Date.now()});cookie(res,'sid',sv);send(res,200,{user,token:sv})}).catch(()=>send(res,400,{error:'Invalid request'}));}
+ if(p==='/api/login'&&method==='POST'){if(!rateLimit('login:'+req.socket.remoteAddress,15))return send(res,429,{error:'Too many login attempts. Try again later.'});return jsonBody(req).then(async x=>{let user=null;if(x.role==='admin'){if(x.username===db.admin.username&&x.password&&hash(x.password)===db.admin.passwordHash)user={role:'admin',id:'admin',name:db.admin.name||'Administrator'}}else{const email=String(x.email||'').trim().toLowerCase();let st=db.students.find(s=>s.email.toLowerCase()===email);if(x.password){if(HAS_SUPABASE){try{const authData=await supaSignIn(email,String(x.password));if(authData?.user){if(!st){let rows=await supaDb(`/students?email=eq.${encodeURIComponent(email)}&select=*`,{method:'GET'});const row=rows?.[0];st={id:id(),auth_user_id:authData.user.id,name:row?.name||authData.user.user_metadata?.name||email.split('@')[0],email,className:row?.class_name||'',roll:row?.roll_number||'',phone:row?.phone||'',photo:null,passwordHash:null,createdAt:row?.created_at||new Date().toISOString()};db.students.push(st);save(db)}else if(!st.auth_user_id){st.auth_user_id=authData.user.id;st.passwordHash=null;save(db)}user={role:'student',id:st.id,authUserId:authData.user.id,name:st.name}}}catch(e){return send(res,401,{error:'Invalid login details'})}}else if(st&&st.passwordHash&&hash(x.password)===st.passwordHash)user={role:'student',id:st.id,name:st.name}}}if(!user)return send(res,401,{error:'Invalid login details'});let sv=id();sessions.set(sv,{...user,lastSeen:Date.now()});cookie(res,'sid',sv);send(res,200,{user,token:sv})}).catch(()=>send(res,400,{error:'Invalid request'}));}
  if(p==='/api/logout'&&method==='POST'){let s=sid(req);if(s)sessions.delete(s);cookie(res,'sid','',0);return send(res,200,{ok:true})}
  if(p==='/api/public'&&method==='GET'){return send(res,200,{notices:db.notices.filter(n=>n.audience==='home'||n.audience==='both').filter(n=>n.type==='written'||n.type==='image'),homeHighlights:db.homeHighlights})}
  const user=auth(req); if(p==='/api/data'&&method==='GET'){if(!user)return send(res,401,{error:'Login required'});return send(res,200,visible(db,user))}
@@ -157,8 +194,8 @@ function route(req,res){
  if(p==='/api/admin/student'&&method==='POST')return jsonBody(req).then(async x=>{if(!x.name||!x.email||!x.password||!x.className)return send(res,400,{error:'Required fields missing'});const email=String(x.email).trim().toLowerCase();if(db.students.some(s=>s.email.toLowerCase()===email))return send(res,409,{error:'Email already registered'});let authUser=null;if(HAS_SUPABASE){try{const created=await supaCreateUser({email,password:String(x.password),name:String(x.name)});authUser=created.user||created}catch(e){return send(res,409,{error:e.message||'Could not create Auth user'})}}let st={id:id(),auth_user_id:authUser?.id||null,name:x.name,email,className:x.className,roll:x.roll||'',phone:x.phone||'',photo:null,passwordHash:HAS_SUPABASE?null:hash(x.password),createdAt:new Date().toISOString()};await syncStudentToSupabase(st);db.students.push(st);save(db);send(res,201,{student:safeStudent(st)})});
  if(p==='/api/admin/student/delete'&&method==='POST')return jsonBody(req).then(async x=>{let st=db.students.find(s=>s.id===x.id);if(st)await deleteStudentFromSupabase(st);db.students=db.students.filter(s=>s.id!==x.id);save(db);send(res,200,{ok:true})});
  if(p==='/api/admin/student/reset'&&method==='POST')return jsonBody(req).then(async x=>{let st=db.students.find(s=>s.id===x.id);if(!st)return send(res,404,{error:'Student not found'});const pwd=x.password||'Student@123';if(HAS_SUPABASE&&st.auth_user_id){await supaUpdatePassword(st.auth_user_id,pwd);st.passwordHash=null}else st.passwordHash=hash(pwd);save(db);send(res,200,{ok:true,tempPassword:pwd})}).catch(()=>send(res,400,{error:'Password reset failed'}));
- if(p==='/api/admin/class'&&method==='POST')return jsonBody(req).then(async x=>{if(!x.name||!x.subject)return send(res,400,{error:'Class and subject required'});const c={id:id(),name:x.name,subject:x.subject,chapters:[],createdAt:new Date().toISOString()};if(HAS_SUPABASE)await syncClassToSupabase(c);db.classes.push(c);save(db);send(res,201,{ok:true})}).catch(e=>{console.error('class sync error:',e.message);send(res,500,{error:'Class save failed'})});
- if(p==='/api/admin/chapter'&&method==='POST')return jsonBody(req).then(async x=>{let c=db.classes.find(c=>c.id===x.classId);if(!c)return send(res,404,{error:'Class not found'});c.chapters=c.chapters||[];const ch={id:id(),name:x.name,createdAt:new Date().toISOString()};c.chapters.push(ch);if(HAS_SUPABASE)await syncClassToSupabase(c);save(db);send(res,201,{ok:true})}).catch(e=>{console.error('chapter sync error:',e.message);send(res,500,{error:'Chapter save failed'})});
+ if(p==='/api/admin/class'&&method==='POST')return jsonBody(req).then(async x=>{if(!x.name||!x.subject)return send(res,400,{error:'Class and subject required'});const c={id:id(),name:x.name,subject:x.subject,chapters:[],createdAt:new Date().toISOString()};db.classes.push(c);save(db);if(HAS_SUPABASE)syncClassToSupabase(c).catch(e=>console.error('normalized class sync warning:',e.message));send(res,201,{ok:true})}).catch(e=>{console.error('class sync error:',e.message);send(res,500,{error:'Class save failed'})});
+ if(p==='/api/admin/chapter'&&method==='POST')return jsonBody(req).then(async x=>{let c=db.classes.find(c=>c.id===x.classId);if(!c)return send(res,404,{error:'Class not found'});c.chapters=c.chapters||[];const ch={id:id(),name:x.name,createdAt:new Date().toISOString()};c.chapters.push(ch);save(db);if(HAS_SUPABASE)syncClassToSupabase(c).catch(e=>console.error('normalized chapter sync warning:',e.message));send(res,201,{ok:true})}).catch(e=>{console.error('chapter sync error:',e.message);send(res,500,{error:'Chapter save failed'})});
  if(p==='/api/admin/material'&&method==='POST')return readBody(req).then(b=>{let x=parseMultipart(b,req.headers['content-type']);if(!x.title||!x.file)return send(res,400,{error:'Title and file required'});db.materials.unshift({id:id(),title:x.title,kind:x.kind||'Study Material',className:x.className||'',subject:x.subject||'',chapterId:x.chapterId||'',description:x.description||'',file:x.file,createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})}).catch(()=>send(res,400,{error:'Material upload failed'}));
  if(p==='/api/admin/assignment'&&method==='POST')return readBody(req).then(b=>{let x=parseMultipart(b,req.headers['content-type']);if(!x.title||!x.file)return send(res,400,{error:'Title and file required'});db.assignments.unshift({id:id(),title:x.title,description:x.description||'',className:x.className||'',dueDate:x.dueDate||'',file:x.file,submissions:[],createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})}).catch(()=>send(res,400,{error:'Assignment upload failed'}));
  if(p==='/api/admin/assessment'&&method==='POST')return jsonBody(req).then(x=>{let key=x.type==='quiz'?'quizzes':'tests';if(!x.title)return send(res,400,{error:'Title required'});let allowed=['mcq','very_short','short','long','case_study','figure'];let questions=(x.questions||[]).map(q=>{let type=allowed.includes(q.type)?q.type:'mcq';return {...q,type,options:type==='mcq'?[...(q.options||[]).slice(0,4)]:[],answer:q.answer||'',figure:q.figure||null,caseStudy:q.caseStudy||''}});db[key].unshift({id:id(),title:x.title,className:x.className||'',description:x.description||'',duration:Number(x.duration||0),openAt:x.openAt||'',closeAt:x.closeAt||'',published:!!x.published,questions,submissions:[],createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})});
@@ -183,4 +220,4 @@ function startServer(port){
   });
   server.listen(port,'0.0.0.0',()=>console.log(`Raza Classes running on http://0.0.0.0:${port}`));
 }
-startServer(Number(PORT));
+(async()=>{try{await initializeCloudState()}catch(e){console.error('startup cloud state warning:',e.message)}startServer(Number(PORT))})();

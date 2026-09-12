@@ -1,15 +1,28 @@
-# Raza Classes — Supabase Auth Integration (v1.1.8)
+# Raza Classes — Persistent Supabase Storage (v1.2.0)
 
-This patch keeps the existing Raza Classes portal and fixes privileged Supabase database writes for student profile synchronization.
+This patch keeps the existing Raza Classes portal UI and adds a persistent Supabase-backed application state layer so Render restarts/redeploys do not erase classes, materials, assignments, tests, quizzes, notices, homepage highlights, syllabus, Exam Adda, or student records.
 
-## Render environment
+## Required Render environment variables
 - `SUPABASE_URL`
 - `SUPABASE_SECRET_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY` (legacy JWT service_role; used for privileged PostgREST/Admin operations)
-- `SUPABASE_PUBLISHABLE_KEY` (used for normal email/password sign-in)
+- `SUPABASE_SERVICE_ROLE_KEY` (legacy service_role JWT; used for privileged Auth/PostgREST compatibility)
+- `SUPABASE_PUBLISHABLE_KEY` (new `sb_publishable_...` key for student password sign-in)
+- Existing `APP_SECRET`, `HASH_SALT`, `ADMIN_PASSWORD`
 
-Do not commit `.env` or any secret values.
+## Supabase setup
+Create the following table once in SQL Editor:
 
+```sql
+create table if not exists public.app_data (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz not null default now()
+);
 
-### v1.1.8
-Mirrors Admin Classes, Subjects, and Chapters into the Supabase `classes`, `subjects`, and `chapters` tables while preserving the existing portal UI and local fallback. Existing local classes are synchronized on server startup.
+alter table public.app_data enable row level security;
+```
+
+The server accesses this table with the server-side privileged key. Do not expose any secret/service-role key in frontend code.
+
+## Important
+The application state is mirrored to `public.app_data`. The existing normalized `students`, `classes`, `subjects`, and `chapters` tables are still maintained where supported, but `app_data` is the authoritative persistent state for the current portal until the full normalized migration is completed.
