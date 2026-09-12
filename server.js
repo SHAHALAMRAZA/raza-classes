@@ -33,6 +33,11 @@ function now(){return new Date()}
 async function supa(pathname,options={},key=SUPABASE_SECRET_KEY){
   if(!HAS_SUPABASE) throw new Error('Supabase is not configured');
   const headers={apikey:key,'Content-Type':'application/json',...(options.headers||{})};
+  // Legacy service_role keys are JWTs and require Authorization: Bearer.
+  // New sb_secret keys are opaque keys and must NOT be sent as Bearer tokens.
+  if(key===SUPABASE_SERVICE_ROLE_KEY && SUPABASE_SERVICE_ROLE_KEY){
+    headers.Authorization=`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  }
   const r=await fetch(`${SUPABASE_URL}${pathname}`, {...options,headers});
   let data=null; try{data=await r.json()}catch{}
   if(!r.ok){const msg=data?.msg||data?.message||data?.error_description||data?.error||`Supabase request failed (${r.status})`; const e=new Error(msg); e.status=r.status; e.data=data; throw e}
