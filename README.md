@@ -1,6 +1,33 @@
-# Raza Classes — Production Package
+# Raza Classes — Supabase Auth Integration (v1.1)
 
-This package preserves the existing Raza Classes portal and adds production-oriented server hardening without removing the existing features.
+This build keeps the existing Raza Classes portal and adds server-side Supabase Auth integration for student accounts. Admin authentication remains protected by the existing server-side admin system.
+
+## What changed
+
+- Student registration creates a Supabase Auth user on the trusted server.
+- Student login verifies credentials through Supabase Auth.
+- Existing students can be migrated to Supabase Auth automatically on their first successful legacy login.
+- Admin-created students are also created in Supabase Auth.
+- Admin password reset updates the linked Supabase Auth password.
+- Added `/health` endpoint for deployment checks.
+- Server explicitly binds to `0.0.0.0` for hosted deployments.
+
+## Environment variables
+
+Required for Supabase Auth integration:
+
+- `SUPABASE_URL=https://<project-ref>.supabase.co`
+- `SUPABASE_SECRET_KEY=sb_secret_...`
+
+Keep the Supabase secret key only in the server/Render environment. Never put it in browser code, GitHub, screenshots, or chat.
+
+Existing variables remain:
+
+- `NODE_ENV=production`
+- `APP_SECRET=<long random secret>`
+- `HASH_SALT=<different long random secret>`
+- `ADMIN_PASSWORD=<strong initial password>`
+- `PORT=<provider supplied port>`
 
 ## Local test
 
@@ -9,24 +36,8 @@ npm install
 npm start
 ```
 
-Open the URL printed by the server. If port 3000 is busy, the app automatically tries the next available port.
+If `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are absent, the app keeps its legacy local authentication mode so the package can still be tested locally.
 
-Default admin credentials for a fresh local database:
-- Username: `admin`
-- Password: `Admin@12345`
+## Important production note
 
-Change the password immediately in Admin Settings.
-
-## Production
-
-Set these environment variables in your hosting provider:
-
-- `NODE_ENV=production`
-- `APP_SECRET=<long random secret>`
-- `HASH_SALT=<different long random secret>`
-- `ADMIN_PASSWORD=<strong initial password>`
-- `PORT=<provider supplied port>`
-
-The application stores its data in `data/db.json`, including uploaded files as encoded data. **For real student use, the `data` directory must be on persistent storage/volume** so deployments or restarts do not erase data. For larger production usage, move file uploads and application data to managed object/database storage.
-
-The server also adds security headers, session expiry, atomic database writes, upload/request size limits, and basic login/registration rate limiting.
+This step integrates Supabase Auth, but the application's main content data and uploads are still being migrated from the local JSON/file storage to Supabase Database + Storage. Do not treat this build as the final persistence migration yet.
