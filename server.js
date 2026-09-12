@@ -6,7 +6,9 @@ const IS_PROD=process.env.NODE_ENV==='production';
 const APP_SECRET=process.env.APP_SECRET||crypto.randomBytes(32).toString('hex');
 const SUPABASE_URL=String(process.env.SUPABASE_URL||'').replace(/\/$/,'');
 const SUPABASE_SECRET_KEY=String(process.env.SUPABASE_SECRET_KEY||'');
-const HAS_SUPABASE=Boolean(SUPABASE_URL&&SUPABASE_SECRET_KEY);
+const SUPABASE_SERVICE_ROLE_KEY=String(process.env.SUPABASE_SERVICE_ROLE_KEY||'');
+const HAS_SUPABASE=Boolean(SUPABASE_URL&&(SUPABASE_SECRET_KEY||SUPABASE_SERVICE_ROLE_KEY));
+const SUPABASE_AUTH_ADMIN_KEY=SUPABASE_SERVICE_ROLE_KEY||SUPABASE_SECRET_KEY;
 const HASH_SALT=process.env.HASH_SALT||'RazaClasses-Production-Salt-2026';
 const SESSION_TTL=Number(process.env.SESSION_TTL||28800);
 const MAX_BODY=Number(process.env.MAX_BODY||50*1024*1024);
@@ -28,22 +30,22 @@ function jsonBody(req){return readBody(req).then(b=>JSON.parse(b.toString()||'{}
 function parseMultipart(buf,ct){const m=String(ct||'').match(/boundary=(?:(?:"([^"]+)")|([^;]+))/i);if(!m)throw Error('Invalid multipart');const boundary=Buffer.from('--'+(m[1]||m[2]));let out={},pos=0;while((pos=buf.indexOf(boundary,pos))!==-1){pos+=boundary.length;if(buf.slice(pos,pos+2).toString()==='--')break;if(buf.slice(pos,pos+2).toString()==='\r\n')pos+=2;let end=buf.indexOf(boundary,pos);if(end<0)break;let part=buf.slice(pos,end-2),sep=part.indexOf('\r\n\r\n');if(sep<0){pos=end;continue}let h=part.slice(0,sep).toString(),data=part.slice(sep+4),nm=(h.match(/name="([^"]+)"/i)||[])[1];if(!nm){pos=end;continue}let fn=(h.match(/filename="([^"]*)"/i)||[])[1];if(fn!==undefined){out[nm]={filename:path.basename(fn),type:(h.match(/Content-Type:\s*([^\r\n]+)/i)||[])[1]||'application/octet-stream',data:data.toString('base64'),size:data.length}}else out[nm]=data.toString('utf8');pos=end}return out}
 function safeStudent(s){if(!s)return null;let {passwordHash,...x}=s;return x}
 function now(){return new Date()}
-async function supa(pathname,options={}){
+async function supa(pathname,options={},key=SUPABASE_SECRET_KEY){
   if(!HAS_SUPABASE) throw new Error('Supabase is not configured');
-  const headers={apikey:SUPABASE_SECRET_KEY,'Content-Type':'application/json',...(options.headers||{})};
+  const headers={apikey:key,'Content-Type':'application/json',...(options.headers||{})};
   const r=await fetch(`${SUPABASE_URL}${pathname}`, {...options,headers});
   let data=null; try{data=await r.json()}catch{}
   if(!r.ok){const msg=data?.msg||data?.message||data?.error_description||data?.error||`Supabase request failed (${r.status})`; const e=new Error(msg); e.status=r.status; e.data=data; throw e}
   return data;
 }
 async function supaCreateUser({email,password,name}){
-  return supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,password,email_confirm:true,user_metadata:{name}})});
+  return supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,password,email_confirm:true,user_metadata:{name}})},SUPABASE_AUTH_ADMIN_KEY);
 }
 async function supaSignIn(email,password){
   return supa('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});
 }
 async function supaUpdatePassword(authUserId,password){
-  return supa(`/auth/v1/admin/users/${encodeURIComponent(authUserId)}`,{method:'PUT',body:JSON.stringify({password})});
+  return supa(`/auth/v1/admin/users/${encodeURIComponent(authUserId)}`,{method:'PUT',body:JSON.stringify({password})},SUPABASE_AUTH_ADMIN_KEY);
 }
 function activeWindow(x){if(!x)return true;let n=now();if(x.openAt&&n<new Date(x.openAt))return false;if(x.closeAt&&n>new Date(x.closeAt))return false;return true}
 function targetMatch(n,user){return n.audience==='home'||n.audience==='both'||(n.audience==='students'&&(n.studentIds||[]).includes(user.id))||(n.audience==='class'&&(n.className||'')===(user.className||''))}

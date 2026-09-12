@@ -1,4 +1,4 @@
-# Raza Classes — Supabase Auth Integration (v1.1)
+# Raza Classes — Supabase Auth Integration (v1.1.2)
 
 This build keeps the existing Raza Classes portal and adds server-side Supabase Auth integration for student accounts. Admin authentication remains protected by the existing server-side admin system.
 
@@ -41,3 +41,6 @@ If `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are absent, the app keeps its legacy
 ## Important production note
 
 This step integrates Supabase Auth, but the application's main content data and uploads are still being migrated from the local JSON/file storage to Supabase Database + Storage. Do not treat this build as the final persistence migration yet.
+
+### Supabase Auth Admin compatibility
+Some hosted Supabase projects currently reject Auth Admin POST mutations (`/auth/v1/admin/users`) when only the new `sb_secret_...` key is supplied, returning `bad_jwt` / “This endpoint requires a valid Bearer token”. This build supports `SUPABASE_SERVICE_ROLE_KEY` as a temporary server-only compatibility key for Auth Admin create/update operations, while `SUPABASE_SECRET_KEY` remains available for server-side Supabase access. Never expose either key in browser code or commit their real values.
