@@ -52,3 +52,12 @@ The server supports both Supabase legacy `service_role` JWT keys (sent with apik
 
 ### Supabase profile sync
 Student Auth accounts are synchronized to `public.students` using the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never expose this key in frontend code or commit it to GitHub.
+
+
+## Supabase Auth keys
+
+Render environment variables required:
+- `SUPABASE_URL` — project URL
+- `SUPABASE_SECRET_KEY` — server-side secret key
+- `SUPABASE_SERVICE_ROLE_KEY` — legacy server-side service_role key (used for compatibility)
+- `SUPABASE_PUBLISHABLE_KEY` — publishable key used for email/password sign-in

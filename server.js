@@ -7,6 +7,7 @@ const APP_SECRET=process.env.APP_SECRET||crypto.randomBytes(32).toString('hex');
 const SUPABASE_URL=String(process.env.SUPABASE_URL||'').replace(/\/$/,'');
 const SUPABASE_SECRET_KEY=String(process.env.SUPABASE_SECRET_KEY||'');
 const SUPABASE_SERVICE_ROLE_KEY=String(process.env.SUPABASE_SERVICE_ROLE_KEY||'');
+const SUPABASE_PUBLISHABLE_KEY=String(process.env.SUPABASE_PUBLISHABLE_KEY||process.env.SUPABASE_ANON_KEY||'');
 const HAS_SUPABASE=Boolean(SUPABASE_URL&&(SUPABASE_SECRET_KEY||SUPABASE_SERVICE_ROLE_KEY));
 const SUPABASE_AUTH_ADMIN_KEY=SUPABASE_SERVICE_ROLE_KEY||SUPABASE_SECRET_KEY;
 const HASH_SALT=process.env.HASH_SALT||'RazaClasses-Production-Salt-2026';
@@ -47,7 +48,9 @@ async function supaCreateUser({email,password,name}){
   return supa('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,password,email_confirm:true,user_metadata:{name}})},SUPABASE_AUTH_ADMIN_KEY);
 }
 async function supaSignIn(email,password){
-  return supa('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});
+  const key=SUPABASE_PUBLISHABLE_KEY;
+  if(!key) throw new Error('Supabase publishable key is not configured');
+  return supa('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},key);
 }
 async function supaUpdatePassword(authUserId,password){
   return supa(`/auth/v1/admin/users/${encodeURIComponent(authUserId)}`,{method:'PUT',body:JSON.stringify({password})},SUPABASE_AUTH_ADMIN_KEY);
