@@ -46,5 +46,9 @@ This step integrates Supabase Auth, but the application's main content data and 
 Some hosted Supabase projects currently reject Auth Admin POST mutations (`/auth/v1/admin/users`) when only the new `sb_secret_...` key is supplied, returning `bad_jwt` / “This endpoint requires a valid Bearer token”. This build supports `SUPABASE_SERVICE_ROLE_KEY` as a temporary server-only compatibility key for Auth Admin create/update operations, while `SUPABASE_SECRET_KEY` remains available for server-side Supabase access. Never expose either key in browser code or commit their real values.
 
 
-## v1.1.3 Auth key compatibility
+## v1.1.4 Auth key compatibility
 The server supports both Supabase legacy `service_role` JWT keys (sent with apikey + Authorization Bearer) and new `sb_secret_...` keys (apikey only). Never expose either key to the browser or GitHub.
+
+
+### Supabase profile sync
+Student Auth accounts are synchronized to `public.students` using the server-only `SUPABASE_SERVICE_ROLE_KEY`. Never expose this key in frontend code or commit it to GitHub.
