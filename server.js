@@ -57,8 +57,14 @@ async function supaUpdatePassword(authUserId,password){
 }
 async function supaDb(pathname,options={}){
   if(!HAS_SUPABASE) return null;
-  const key=SUPABASE_SERVICE_ROLE_KEY||SUPABASE_SECRET_KEY;
-  const headers={apikey:key,'Authorization':`Bearer ${key}`,'Content-Type':'application/json',...(options.headers||{})};
+  // Prefer the new sb_secret key for PostgREST. It is a privileged server key
+  // and must be sent via apikey only; do not send it as a Bearer token.
+  // Fall back to legacy service_role, which uses Bearer authentication.
+  const key=SUPABASE_SECRET_KEY||SUPABASE_SERVICE_ROLE_KEY;
+  const headers={apikey:key,'Content-Type':'application/json',...(options.headers||{})};
+  if(!SUPABASE_SECRET_KEY && SUPABASE_SERVICE_ROLE_KEY){
+    headers.Authorization=`Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
+  }
   const r=await fetch(`${SUPABASE_URL}/rest/v1${pathname}`,{...options,headers});
   const text=await r.text();
   let data;try{data=text?JSON.parse(text):null}catch{data=text}
