@@ -19,6 +19,7 @@ function fresh(){return {admin:{username:'admin',name:'Administrator',photo:null
 function load(){if(!fs.existsSync(path.dirname(DATA)))fs.mkdirSync(path.dirname(DATA),{recursive:true});if(!fs.existsSync(DATA))fs.writeFileSync(DATA,JSON.stringify(fresh(),null,2));let d=JSON.parse(fs.readFileSync(DATA,'utf8'));let f=fresh();for(const k of Object.keys(f))if(d[k]===undefined)d[k]=f[k];if(!Array.isArray(d.classes))d.classes=[];if(!Array.isArray(d.materials))d.materials=[];if(!Array.isArray(d.assignments))d.assignments=[];if(!Array.isArray(d.tests))d.tests=[];if(!Array.isArray(d.quizzes))d.quizzes=[];if(!Array.isArray(d.notices))d.notices=[];if(!Array.isArray(d.homeHighlights))d.homeHighlights=[];return d}
 function save(db){const tmp=DATA+'.tmp';fs.writeFileSync(tmp,JSON.stringify(db,null,2),{mode:0o600});fs.renameSync(tmp,DATA)}
 let db=load(); const sessions=new Map(); const attempts=new Map(); const loginHits=new Map();
+if(HAS_SUPABASE) syncAllClassesToSupabase().catch(e=>console.error('class sync warning:',e.message));
 setInterval(()=>{const t=Date.now();for(const [k,v] of sessions)if(t-v.lastSeen>SESSION_TTL*1000)sessions.delete(k)},60000).unref();
 function rateLimit(key,limit=12,windowMs=10*60*1000){const now=Date.now(),a=loginHits.get(key)||[];const fresh=a.filter(t=>now-t<windowMs);if(fresh.length>=limit){loginHits.set(key,fresh);return false}fresh.push(now);loginHits.set(key,fresh);return true}
 function publicFile(res,file,type){const f=path.join(PUBLIC,file);if(!fs.existsSync(f))return send(res,404,{error:'File not found'});res.writeHead(200,{'Content-Type':type||'application/octet-stream','Cache-Control':'public, max-age=86400'});fs.createReadStream(f).pipe(res)}
@@ -87,6 +88,37 @@ async function syncStudentToSupabase(st){
     })
   });
 }
+async function syncClassToSupabase(c){
+  if(!HAS_SUPABASE||!c?.id) return;
+  // Keep the existing local class structure, but mirror it into the
+  // normalized Supabase classes / subjects / chapters tables.
+  await supaDb('/classes?on_conflict=id',{
+    method:'POST',
+    headers:{Prefer:'resolution=merge-duplicates,return=minimal'},
+    body:JSON.stringify({id:c.id,name:c.name,description:c.description||null,status:'active'})
+  });
+  if(c.subject){
+    if(!c.subjectId)c.subjectId=id();
+    await supaDb('/subjects?on_conflict=id',{
+      method:'POST',
+      headers:{Prefer:'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify({id:c.subjectId,class_id:c.id,name:c.subject,status:'active'})
+    });
+    for(const ch of (c.chapters||[])){
+      await supaDb('/chapters?on_conflict=id',{
+        method:'POST',
+        headers:{Prefer:'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify({id:ch.id,subject_id:c.subjectId,name:ch.name,status:'active'})
+      });
+    }
+  }
+}
+async function syncAllClassesToSupabase(){
+  if(!HAS_SUPABASE)return;
+  for(const c of db.classes||[]) await syncClassToSupabase(c);
+  save(db);
+}
+
 async function deleteStudentFromSupabase(st){
   if(!HAS_SUPABASE||!st?.auth_user_id)return;
   await supaDb(`/students?auth_user_id=eq.${encodeURIComponent(st.auth_user_id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}});
@@ -125,8 +157,8 @@ function route(req,res){
  if(p==='/api/admin/student'&&method==='POST')return jsonBody(req).then(async x=>{if(!x.name||!x.email||!x.password||!x.className)return send(res,400,{error:'Required fields missing'});const email=String(x.email).trim().toLowerCase();if(db.students.some(s=>s.email.toLowerCase()===email))return send(res,409,{error:'Email already registered'});let authUser=null;if(HAS_SUPABASE){try{const created=await supaCreateUser({email,password:String(x.password),name:String(x.name)});authUser=created.user||created}catch(e){return send(res,409,{error:e.message||'Could not create Auth user'})}}let st={id:id(),auth_user_id:authUser?.id||null,name:x.name,email,className:x.className,roll:x.roll||'',phone:x.phone||'',photo:null,passwordHash:HAS_SUPABASE?null:hash(x.password),createdAt:new Date().toISOString()};await syncStudentToSupabase(st);db.students.push(st);save(db);send(res,201,{student:safeStudent(st)})});
  if(p==='/api/admin/student/delete'&&method==='POST')return jsonBody(req).then(async x=>{let st=db.students.find(s=>s.id===x.id);if(st)await deleteStudentFromSupabase(st);db.students=db.students.filter(s=>s.id!==x.id);save(db);send(res,200,{ok:true})});
  if(p==='/api/admin/student/reset'&&method==='POST')return jsonBody(req).then(async x=>{let st=db.students.find(s=>s.id===x.id);if(!st)return send(res,404,{error:'Student not found'});const pwd=x.password||'Student@123';if(HAS_SUPABASE&&st.auth_user_id){await supaUpdatePassword(st.auth_user_id,pwd);st.passwordHash=null}else st.passwordHash=hash(pwd);save(db);send(res,200,{ok:true,tempPassword:pwd})}).catch(()=>send(res,400,{error:'Password reset failed'}));
- if(p==='/api/admin/class'&&method==='POST')return jsonBody(req).then(x=>{if(!x.name||!x.subject)return send(res,400,{error:'Class and subject required'});db.classes.push({id:id(),name:x.name,subject:x.subject,chapters:[],createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})});
- if(p==='/api/admin/chapter'&&method==='POST')return jsonBody(req).then(x=>{let c=db.classes.find(c=>c.id===x.classId);if(!c)return send(res,404,{error:'Class not found'});c.chapters=c.chapters||[];c.chapters.push({id:id(),name:x.name,createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})});
+ if(p==='/api/admin/class'&&method==='POST')return jsonBody(req).then(async x=>{if(!x.name||!x.subject)return send(res,400,{error:'Class and subject required'});const c={id:id(),name:x.name,subject:x.subject,chapters:[],createdAt:new Date().toISOString()};if(HAS_SUPABASE)await syncClassToSupabase(c);db.classes.push(c);save(db);send(res,201,{ok:true})}).catch(e=>{console.error('class sync error:',e.message);send(res,500,{error:'Class save failed'})});
+ if(p==='/api/admin/chapter'&&method==='POST')return jsonBody(req).then(async x=>{let c=db.classes.find(c=>c.id===x.classId);if(!c)return send(res,404,{error:'Class not found'});c.chapters=c.chapters||[];const ch={id:id(),name:x.name,createdAt:new Date().toISOString()};c.chapters.push(ch);if(HAS_SUPABASE)await syncClassToSupabase(c);save(db);send(res,201,{ok:true})}).catch(e=>{console.error('chapter sync error:',e.message);send(res,500,{error:'Chapter save failed'})});
  if(p==='/api/admin/material'&&method==='POST')return readBody(req).then(b=>{let x=parseMultipart(b,req.headers['content-type']);if(!x.title||!x.file)return send(res,400,{error:'Title and file required'});db.materials.unshift({id:id(),title:x.title,kind:x.kind||'Study Material',className:x.className||'',subject:x.subject||'',chapterId:x.chapterId||'',description:x.description||'',file:x.file,createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})}).catch(()=>send(res,400,{error:'Material upload failed'}));
  if(p==='/api/admin/assignment'&&method==='POST')return readBody(req).then(b=>{let x=parseMultipart(b,req.headers['content-type']);if(!x.title||!x.file)return send(res,400,{error:'Title and file required'});db.assignments.unshift({id:id(),title:x.title,description:x.description||'',className:x.className||'',dueDate:x.dueDate||'',file:x.file,submissions:[],createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})}).catch(()=>send(res,400,{error:'Assignment upload failed'}));
  if(p==='/api/admin/assessment'&&method==='POST')return jsonBody(req).then(x=>{let key=x.type==='quiz'?'quizzes':'tests';if(!x.title)return send(res,400,{error:'Title required'});let allowed=['mcq','very_short','short','long','case_study','figure'];let questions=(x.questions||[]).map(q=>{let type=allowed.includes(q.type)?q.type:'mcq';return {...q,type,options:type==='mcq'?[...(q.options||[]).slice(0,4)]:[],answer:q.answer||'',figure:q.figure||null,caseStudy:q.caseStudy||''}});db[key].unshift({id:id(),title:x.title,className:x.className||'',description:x.description||'',duration:Number(x.duration||0),openAt:x.openAt||'',closeAt:x.closeAt||'',published:!!x.published,questions,submissions:[],createdAt:new Date().toISOString()});save(db);send(res,201,{ok:true})});

@@ -1,4 +1,4 @@
-# Raza Classes — Supabase Auth Integration (v1.1.7)
+# Raza Classes — Supabase Auth Integration (v1.1.8)
 
 This patch keeps the existing Raza Classes portal and fixes privileged Supabase database writes for student profile synchronization.
 
@@ -9,3 +9,7 @@ This patch keeps the existing Raza Classes portal and fixes privileged Supabase 
 - `SUPABASE_PUBLISHABLE_KEY` (used for normal email/password sign-in)
 
 Do not commit `.env` or any secret values.
+
+
+### v1.1.8
+Mirrors Admin Classes, Subjects, and Chapters into the Supabase `classes`, `subjects`, and `chapters` tables while preserving the existing portal UI and local fallback. Existing local classes are synchronized on server startup.
